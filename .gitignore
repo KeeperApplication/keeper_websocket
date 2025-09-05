@@ -1,0 +1,16 @@
+# Ignore the environment file
+.env
+
+# Ignore binary files
+*.exe
+*.dll
+*.so
+*.dylib
+*.exe~
+*.out
+# Ignore editor swap files
+*~
+*.swp
+# Ignore IDE specific files
+.vscode/
+.idea/
