@@ -15,6 +15,7 @@ import (
 	"keeper.websocket.go/internal/auth"
 	"keeper.websocket.go/internal/config"
 	"keeper.websocket.go/internal/handler"
+	"keeper.websocket.go/internal/presence"
 	"keeper.websocket.go/internal/rabbitmq"
 	"keeper.websocket.go/internal/websocket"
 )
@@ -27,8 +28,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	hub := websocket.NewHub(logger)
+	hub := websocket.NewHub()
 	go hub.Run()
+
+	presenceService, err := presence.NewService(cfg, logger, hub.Broadcast)
+	if err != nil {
+		logger.Error("failed to create presence service", "error", err)
+		os.Exit(1)
+	}
+	go presenceService.ListenForUpdates(ctx)
+	go presenceService.StartDisconnectWorker(ctx)
 
 	publisher, err := rabbitmq.NewPublisher(cfg, logger)
 	if err != nil {
@@ -43,7 +52,7 @@ func main() {
 		return publisher.Publish(ctx, routingKey, body)
 	}
 
-	websocketHandler := handler.NewWebsocketHandler(hub, logger, cfg, authorizer, publishFunc)
+	websocketHandler := handler.NewWebsocketHandler(hub, logger, cfg, authorizer, publishFunc, presenceService)
 
 	consumer := rabbitmq.NewConsumer(logger, cfg, hub.Broadcast)
 	consumer.Start(ctx)

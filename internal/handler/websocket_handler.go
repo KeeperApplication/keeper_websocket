@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -8,24 +9,27 @@ import (
 	"github.com/gorilla/websocket"
 	"keeper.websocket.go/internal/auth"
 	"keeper.websocket.go/internal/config"
+	"keeper.websocket.go/internal/presence"
 	internalWs "keeper.websocket.go/internal/websocket"
 )
 
 type WebsocketHandler struct {
-	hub         *internalWs.Hub
-	logger      *slog.Logger
-	cfg         *config.Config
-	authorizer  *auth.Authorizer
-	publishFunc internalWs.PublishFunc
+	hub             *internalWs.Hub
+	logger          *slog.Logger
+	cfg             *config.Config
+	authorizer      *auth.Authorizer
+	publishFunc     internalWs.PublishFunc
+	presenceService *presence.Service
 }
 
-func NewWebsocketHandler(h *internalWs.Hub, l *slog.Logger, cfg *config.Config, auth *auth.Authorizer, pub internalWs.PublishFunc) *WebsocketHandler {
+func NewWebsocketHandler(h *internalWs.Hub, l *slog.Logger, cfg *config.Config, auth *auth.Authorizer, pub internalWs.PublishFunc, pres *presence.Service) *WebsocketHandler {
 	return &WebsocketHandler{
-		hub:         h,
-		logger:      l,
-		cfg:         cfg,
-		authorizer:  auth,
-		publishFunc: pub,
+		hub:             h,
+		logger:          l,
+		cfg:             cfg,
+		authorizer:      auth,
+		publishFunc:     pub,
+		presenceService: pres,
 	}
 }
 
@@ -68,6 +72,20 @@ func (wh *WebsocketHandler) ServeWs(w http.ResponseWriter, r *http.Request) {
 		wh.logger.Error("failed to upgrade connection", "error", err)
 		return
 	}
+
+	err = wh.presenceService.AddUser(context.Background(), username)
+	if err != nil {
+		wh.logger.Error("failed to add user to presence service", "error", err)
+	}
+
+	conn.SetCloseHandler(func(code int, text string) error {
+		wh.logger.Info("client connection closed", "user", username, "code", code)
+		err := wh.presenceService.RemoveUser(context.Background(), username)
+		if err != nil {
+			wh.logger.Error("failed to remove user from presence service on close", "user", username, "error", err)
+		}
+		return nil
+	})
 
 	client := internalWs.NewClient(wh.hub, conn, wh.logger, username, token, wh.authorizer, wh.publishFunc)
 	client.Hub.Register <- client

@@ -13,6 +13,7 @@ type Config struct {
 	JWTSecret   string
 	JavaApiURL  string
 	FrontendURL string
+	RedisURL    string
 }
 
 func Load() *Config {
@@ -29,6 +30,7 @@ func Load() *Config {
 		JWTSecret:   getEnv("JWT_SECRET", "default-secret"),
 		JavaApiURL:  getEnv("JAVA_API_URL", "http://localhost:8080/api"),
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
+		RedisURL:    getEnv("REDIS_URL", "redis://localhost:6379/0"),
 	}
 }
 

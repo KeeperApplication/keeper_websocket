@@ -1,5 +1,7 @@
 package shared
 
+const PresenceTopic = "presence:lobby"
+
 type InternalBroadcast struct {
 	Message []byte
 	Origin  interface{}
@@ -13,4 +15,10 @@ type MessageCommand struct {
 	RepliedToID   *int64 `json:"repliedToId,omitempty"`
 	Emoji         string `json:"emoji,omitempty"`
 	LastMessageID int64  `json:"lastMessageId,omitempty"`
+}
+
+type BroadcastMessage struct {
+	Topic   string      `json:"topic"`
+	Event   string      `json:"event"`
+	Payload interface{} `json:"payload"`
 }

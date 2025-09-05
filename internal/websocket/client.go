@@ -73,19 +73,35 @@ func (c *Client) ReadPump() {
 	}
 }
 
-func extractID(payload map[string]interface{}, key string) (int64, error) {
-	val, ok := payload[key]
-	if !ok {
-		return 0, fmt.Errorf("key '%s' not found in payload", key)
-	}
+func (c *Client) WritePump() {
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		c.Conn.Close()
+	}()
 
-	switch v := val.(type) {
-	case float64:
-		return int64(v), nil
-	case string:
-		return strconv.ParseInt(v, 10, 64)
-	default:
-		return 0, fmt.Errorf("invalid type for key '%s': %T", key, v)
+	for {
+		select {
+		case message, ok := <-c.Send:
+			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			w, err := c.Conn.NextWriter(websocket.TextMessage)
+			if err != nil {
+				return
+			}
+			w.Write(message)
+			if err := w.Close(); err != nil {
+				return
+			}
+		case <-ticker.C:
+			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		}
 	}
 }
 
@@ -95,22 +111,18 @@ func (c *Client) handleIncomingMessage(message []byte) {
 		c.logger.Warn("failed to unmarshal client message", "error", err)
 		return
 	}
-
 	routingKey := "cmd.v2.message." + msg.Action
 	command := shared.MessageCommand{UserToken: c.token}
-
 	payload, ok := msg.Payload.(map[string]interface{})
 	if !ok && msg.Payload != nil {
 		c.logger.Warn("invalid payload format for action", "action", msg.Action)
 		return
 	}
-
 	var err error
 	switch msg.Action {
 	case "subscribe", "unsubscribe", "typing":
 		c.handleLocalAction(&msg)
 		return
-
 	case "new_message":
 		roomID, err := strconv.ParseInt(strings.TrimPrefix(msg.Topic, "room:"), 10, 64)
 		if err != nil {
@@ -119,14 +131,12 @@ func (c *Client) handleIncomingMessage(message []byte) {
 		}
 		command.RoomID = roomID
 		command.Content, _ = payload["content"].(string)
-
 		if repliedToIDVal, ok := payload["repliedToId"]; ok && repliedToIDVal != nil {
 			if repliedToIDFloat, ok := repliedToIDVal.(float64); ok {
 				repliedToID := int64(repliedToIDFloat)
 				command.RepliedToID = &repliedToID
 			}
 		}
-
 	case "edit_message":
 		command.MessageID, err = extractID(payload, "messageId")
 		if err != nil {
@@ -134,21 +144,18 @@ func (c *Client) handleIncomingMessage(message []byte) {
 			return
 		}
 		command.Content, _ = payload["content"].(string)
-
 	case "delete_message":
 		command.MessageID, err = extractID(payload, "messageId")
 		if err != nil {
 			c.logger.Warn("failed to extract messageId for delete", "error", err)
 			return
 		}
-
 	case "toggle_pin":
 		command.MessageID, err = extractID(payload, "messageId")
 		if err != nil {
 			c.logger.Warn("failed to extract messageId for toggle_pin", "error", err)
 			return
 		}
-
 	case "toggle_reaction":
 		command.MessageID, err = extractID(payload, "messageId")
 		if err != nil {
@@ -156,7 +163,6 @@ func (c *Client) handleIncomingMessage(message []byte) {
 			return
 		}
 		command.Emoji, _ = payload["emoji"].(string)
-
 	case "messages_seen":
 		roomID, err := strconv.ParseInt(strings.TrimPrefix(msg.Topic, "room:"), 10, 64)
 		if err != nil {
@@ -169,12 +175,10 @@ func (c *Client) handleIncomingMessage(message []byte) {
 			c.logger.Warn("failed to extract lastMessageId for messages_seen", "error", err)
 			return
 		}
-
 	default:
 		c.logger.Warn("unknown client message action", "action", msg.Action)
 		return
 	}
-
 	if err := c.publish(context.Background(), routingKey, command); err != nil {
 		c.logger.Error("failed to publish command", "action", msg.Action, "error", err)
 	}
@@ -190,12 +194,10 @@ func (c *Client) handleLocalAction(msg *ClientMessage) {
 		c.topics[msg.Topic] = true
 		c.Hub.Subscribe <- &Subscription{Client: c, Topic: msg.Topic}
 		c.logger.Info("client subscribed to topic", "topic", msg.Topic, "user", c.Username)
-
 	case "unsubscribe":
 		delete(c.topics, msg.Topic)
 		c.Hub.Unsubscribe <- &Subscription{Client: c, Topic: msg.Topic}
 		c.logger.Info("client unsubscribed from topic", "topic", msg.Topic, "user", c.Username)
-
 	case "typing":
 		roomID, err := strconv.ParseInt(strings.TrimPrefix(msg.Topic, "room:"), 10, 64)
 		if err != nil {
@@ -207,7 +209,7 @@ func (c *Client) handleLocalAction(msg *ClientMessage) {
 			"senderUsername": c.Username,
 			"roomId":         roomID,
 		}
-		broadcastMsg := BroadcastMessage{
+		broadcastMsg := shared.BroadcastMessage{
 			Topic:   msg.Topic,
 			Event:   "new_event",
 			Payload: payload,
@@ -224,36 +226,17 @@ func (c *Client) handleLocalAction(msg *ClientMessage) {
 	}
 }
 
-func (c *Client) WritePump() {
-	ticker := time.NewTicker(pingPeriod)
-	defer func() {
-		ticker.Stop()
-		c.Conn.Close()
-	}()
-
-	for {
-		select {
-		case message, ok := <-c.Send:
-			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-
-			w, err := c.Conn.NextWriter(websocket.TextMessage)
-			if err != nil {
-				return
-			}
-			w.Write(message)
-
-			if err := w.Close(); err != nil {
-				return
-			}
-		case <-ticker.C:
-			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
-			}
-		}
+func extractID(payload map[string]interface{}, key string) (int64, error) {
+	val, ok := payload[key]
+	if !ok {
+		return 0, fmt.Errorf("key '%s' not found in payload", key)
+	}
+	switch v := val.(type) {
+	case float64:
+		return int64(v), nil
+	case string:
+		return strconv.ParseInt(v, 10, 64)
+	default:
+		return 0, fmt.Errorf("invalid type for key '%s': %T", key, v)
 	}
 }

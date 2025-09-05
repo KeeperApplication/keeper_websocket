@@ -1,4 +1,3 @@
-
 services:
   rabbitmq:
     image: "rabbitmq:3.13-management"
@@ -8,3 +7,20 @@ services:
     environment:
       - RABBITMQ_DEFAULT_USER=guest
       - RABBITMQ_DEFAULT_PASS=guest
+    restart: always
+
+  redis:
+    image: "redis:7-alpine"
+    ports:
+      - "6379:6379"
+    restart: always
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
