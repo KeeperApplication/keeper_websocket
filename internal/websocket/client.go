@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"keeper.websocket.go/internal/auth"
+	"keeper.websocket.go/internal/presence"
 	"keeper.websocket.go/internal/shared"
 )
 
@@ -24,28 +25,30 @@ const (
 )
 
 type Client struct {
-	Hub        *Hub
-	Conn       *websocket.Conn
-	Send       chan []byte
-	logger     *slog.Logger
-	topics     map[string]bool
-	Username   string
-	token      string
-	authorizer *auth.Authorizer
-	publish    PublishFunc
+	Hub             *Hub
+	Conn            *websocket.Conn
+	Send            chan []byte
+	logger          *slog.Logger
+	topics          map[string]bool
+	Username        string
+	token           string
+	authorizer      *auth.Authorizer
+	publish         PublishFunc
+	presenceService *presence.Service
 }
 
-func NewClient(hub *Hub, conn *websocket.Conn, logger *slog.Logger, username, token string, authorizer *auth.Authorizer, publish PublishFunc) *Client {
+func NewClient(hub *Hub, conn *websocket.Conn, logger *slog.Logger, username, token string, authorizer *auth.Authorizer, publish PublishFunc, presenceService *presence.Service) *Client {
 	return &Client{
-		Hub:        hub,
-		Conn:       conn,
-		Send:       make(chan []byte, 256),
-		logger:     logger,
-		topics:     make(map[string]bool),
-		Username:   username,
-		token:      token,
-		authorizer: authorizer,
-		publish:    publish,
+		Hub:             hub,
+		Conn:            conn,
+		Send:            make(chan []byte, 256),
+		logger:          logger,
+		topics:          make(map[string]bool),
+		Username:        username,
+		token:           token,
+		authorizer:      authorizer,
+		publish:         publish,
+		presenceService: presenceService,
 	}
 }
 
@@ -194,6 +197,16 @@ func (c *Client) handleLocalAction(msg *ClientMessage) {
 		c.topics[msg.Topic] = true
 		c.Hub.Subscribe <- &Subscription{Client: c, Topic: msg.Topic}
 		c.logger.Info("client subscribed to topic", "topic", msg.Topic, "user", c.Username)
+
+		if msg.Topic == shared.PresenceTopic {
+			payload, err := c.presenceService.GetPresenceUpdatePayload(context.Background())
+			if err != nil {
+				c.logger.Error("failed to get initial presence payload for new subscriber", "error", err)
+				return
+			}
+			c.Send <- payload
+		}
+
 	case "unsubscribe":
 		delete(c.topics, msg.Topic)
 		c.Hub.Unsubscribe <- &Subscription{Client: c, Topic: msg.Topic}

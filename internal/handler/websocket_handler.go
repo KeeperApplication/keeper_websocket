@@ -87,7 +87,7 @@ func (wh *WebsocketHandler) ServeWs(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	client := internalWs.NewClient(wh.hub, conn, wh.logger, username, token, wh.authorizer, wh.publishFunc)
+	client := internalWs.NewClient(wh.hub, conn, wh.logger, username, token, wh.authorizer, wh.publishFunc, wh.presenceService)
 	client.Hub.Register <- client
 
 	wh.logger.Info("client connected and authenticated", "user", username)

@@ -130,20 +130,9 @@ func (s *Service) ListenForUpdates(ctx context.Context) {
 }
 
 func (s *Service) BroadcastPresenceUpdate(ctx context.Context) {
-	users, err := s.redisClient.SMembers(ctx, onlineUsersKey).Result()
+	jsonMsg, err := s.GetPresenceUpdatePayload(ctx)
 	if err != nil {
-		s.logger.Error("failed to get online users from redis for broadcast", "error", err)
-		return
-	}
-	payload := map[string]interface{}{"users": users}
-	broadcastMsg := shared.BroadcastMessage{
-		Topic:   shared.PresenceTopic,
-		Event:   "presence_update",
-		Payload: payload,
-	}
-	jsonMsg, err := json.Marshal(broadcastMsg)
-	if err != nil {
-		s.logger.Error("failed to marshal presence update for hub", "error", err)
+		s.logger.Error("failed to get presence update payload for broadcast", "error", err)
 		return
 	}
 	select {
@@ -151,4 +140,18 @@ func (s *Service) BroadcastPresenceUpdate(ctx context.Context) {
 	case <-time.After(1 * time.Second):
 		s.logger.Warn("timed out sending presence update to hub channel")
 	}
+}
+
+func (s *Service) GetPresenceUpdatePayload(ctx context.Context) ([]byte, error) {
+	users, err := s.redisClient.SMembers(ctx, onlineUsersKey).Result()
+	if err != nil {
+		return nil, err
+	}
+	payload := map[string]interface{}{"users": users}
+	broadcastMsg := shared.BroadcastMessage{
+		Topic:   shared.PresenceTopic,
+		Event:   "presence_update",
+		Payload: payload,
+	}
+	return json.Marshal(broadcastMsg)
 }
