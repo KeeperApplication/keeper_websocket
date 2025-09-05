@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"keeper.websocket.go/internal/auth"
+	"keeper.websocket.go/internal/broker"
 	"keeper.websocket.go/internal/config"
 	"keeper.websocket.go/internal/handler"
 	"keeper.websocket.go/internal/presence"
@@ -46,6 +47,13 @@ func main() {
 	}
 	defer publisher.Close()
 
+	eventSubscriber, err := broker.NewSubscriber(cfg, logger, hub.Broadcast)
+	if err != nil {
+		logger.Error("failed to create event subscriber", "error", err)
+		os.Exit(1)
+	}
+	go eventSubscriber.ListenForEvents(ctx)
+
 	authorizer := auth.NewAuthorizer(cfg, logger)
 
 	publishFunc := func(ctx context.Context, routingKey string, body interface{}) error {
@@ -53,9 +61,6 @@ func main() {
 	}
 
 	websocketHandler := handler.NewWebsocketHandler(hub, logger, cfg, authorizer, publishFunc, presenceService)
-
-	consumer := rabbitmq.NewConsumer(logger, cfg, hub.Broadcast)
-	consumer.Start(ctx)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
