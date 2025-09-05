@@ -14,7 +14,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"keeper.websocket.go/internal/auth"
 	"keeper.websocket.go/internal/config"
-	"keeper.websocket.go/internal/coreapi"
 	"keeper.websocket.go/internal/handler"
 	"keeper.websocket.go/internal/rabbitmq"
 	"keeper.websocket.go/internal/websocket"
@@ -31,9 +30,20 @@ func main() {
 	hub := websocket.NewHub(logger)
 	go hub.Run()
 
+	publisher, err := rabbitmq.NewPublisher(cfg, logger)
+	if err != nil {
+		logger.Error("failed to create rabbitmq publisher", "error", err)
+		os.Exit(1)
+	}
+	defer publisher.Close()
+
 	authorizer := auth.NewAuthorizer(cfg, logger)
-	coreApiClient := coreapi.NewClient(cfg, logger)
-	websocketHandler := handler.NewWebsocketHandler(hub, logger, cfg, authorizer, coreApiClient)
+
+	publishFunc := func(ctx context.Context, routingKey string, body interface{}) error {
+		return publisher.Publish(ctx, routingKey, body)
+	}
+
+	websocketHandler := handler.NewWebsocketHandler(hub, logger, cfg, authorizer, publishFunc)
 
 	consumer := rabbitmq.NewConsumer(logger, cfg, hub.Broadcast)
 	consumer.Start(ctx)

@@ -1,15 +1,20 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"keeper.websocket.go/internal/auth"
-	"keeper.websocket.go/internal/coreapi"
+	"keeper.websocket.go/internal/shared"
 )
+
+type PublishFunc func(ctx context.Context, routingKey string, body interface{}) error
 
 const (
 	writeWait      = 10 * time.Second
@@ -27,10 +32,10 @@ type Client struct {
 	Username   string
 	token      string
 	authorizer *auth.Authorizer
-	coreClient *coreapi.Client
+	publish    PublishFunc
 }
 
-func NewClient(hub *Hub, conn *websocket.Conn, logger *slog.Logger, username, token string, authorizer *auth.Authorizer, coreClient *coreapi.Client) *Client {
+func NewClient(hub *Hub, conn *websocket.Conn, logger *slog.Logger, username, token string, authorizer *auth.Authorizer, publish PublishFunc) *Client {
 	return &Client{
 		Hub:        hub,
 		Conn:       conn,
@@ -40,7 +45,7 @@ func NewClient(hub *Hub, conn *websocket.Conn, logger *slog.Logger, username, to
 		Username:   username,
 		token:      token,
 		authorizer: authorizer,
-		coreClient: coreClient,
+		publish:    publish,
 	}
 }
 
@@ -57,8 +62,6 @@ func (c *Client) ReadPump() {
 	})
 
 	for {
-		//c.logger.Info("DEBUG: ReadPump is waiting for a message...")
-
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
@@ -70,15 +73,114 @@ func (c *Client) ReadPump() {
 	}
 }
 
-func (c *Client) handleIncomingMessage(message []byte) {
-	// c.logger.Info("DEBUG: handleIncomingMessage received", "message", string(message))
+func extractID(payload map[string]interface{}, key string) (int64, error) {
+	val, ok := payload[key]
+	if !ok {
+		return 0, fmt.Errorf("key '%s' not found in payload", key)
+	}
 
+	switch v := val.(type) {
+	case float64:
+		return int64(v), nil
+	case string:
+		return strconv.ParseInt(v, 10, 64)
+	default:
+		return 0, fmt.Errorf("invalid type for key '%s': %T", key, v)
+	}
+}
+
+func (c *Client) handleIncomingMessage(message []byte) {
 	var msg ClientMessage
 	if err := json.Unmarshal(message, &msg); err != nil {
 		c.logger.Warn("failed to unmarshal client message", "error", err)
 		return
 	}
 
+	routingKey := "cmd.v2.message." + msg.Action
+	command := shared.MessageCommand{UserToken: c.token}
+
+	payload, ok := msg.Payload.(map[string]interface{})
+	if !ok && msg.Payload != nil {
+		c.logger.Warn("invalid payload format for action", "action", msg.Action)
+		return
+	}
+
+	var err error
+	switch msg.Action {
+	case "subscribe", "unsubscribe", "typing":
+		c.handleLocalAction(&msg)
+		return
+
+	case "new_message":
+		roomID, err := strconv.ParseInt(strings.TrimPrefix(msg.Topic, "room:"), 10, 64)
+		if err != nil {
+			c.logger.Warn("invalid room ID in topic", "topic", msg.Topic)
+			return
+		}
+		command.RoomID = roomID
+		command.Content, _ = payload["content"].(string)
+
+		if repliedToIDVal, ok := payload["repliedToId"]; ok && repliedToIDVal != nil {
+			if repliedToIDFloat, ok := repliedToIDVal.(float64); ok {
+				repliedToID := int64(repliedToIDFloat)
+				command.RepliedToID = &repliedToID
+			}
+		}
+
+	case "edit_message":
+		command.MessageID, err = extractID(payload, "messageId")
+		if err != nil {
+			c.logger.Warn("failed to extract messageId for edit", "error", err)
+			return
+		}
+		command.Content, _ = payload["content"].(string)
+
+	case "delete_message":
+		command.MessageID, err = extractID(payload, "messageId")
+		if err != nil {
+			c.logger.Warn("failed to extract messageId for delete", "error", err)
+			return
+		}
+
+	case "toggle_pin":
+		command.MessageID, err = extractID(payload, "messageId")
+		if err != nil {
+			c.logger.Warn("failed to extract messageId for toggle_pin", "error", err)
+			return
+		}
+
+	case "toggle_reaction":
+		command.MessageID, err = extractID(payload, "messageId")
+		if err != nil {
+			c.logger.Warn("failed to extract messageId for toggle_reaction", "error", err)
+			return
+		}
+		command.Emoji, _ = payload["emoji"].(string)
+
+	case "messages_seen":
+		roomID, err := strconv.ParseInt(strings.TrimPrefix(msg.Topic, "room:"), 10, 64)
+		if err != nil {
+			c.logger.Warn("invalid room ID in topic", "topic", msg.Topic)
+			return
+		}
+		command.RoomID = roomID
+		command.LastMessageID, err = extractID(payload, "lastMessageId")
+		if err != nil {
+			c.logger.Warn("failed to extract lastMessageId for messages_seen", "error", err)
+			return
+		}
+
+	default:
+		c.logger.Warn("unknown client message action", "action", msg.Action)
+		return
+	}
+
+	if err := c.publish(context.Background(), routingKey, command); err != nil {
+		c.logger.Error("failed to publish command", "action", msg.Action, "error", err)
+	}
+}
+
+func (c *Client) handleLocalAction(msg *ClientMessage) {
 	switch msg.Action {
 	case "subscribe":
 		if !c.authorizer.CanSubscribe(c.token, msg.Topic) {
@@ -95,10 +197,15 @@ func (c *Client) handleIncomingMessage(message []byte) {
 		c.logger.Info("client unsubscribed from topic", "topic", msg.Topic, "user", c.Username)
 
 	case "typing":
+		roomID, err := strconv.ParseInt(strings.TrimPrefix(msg.Topic, "room:"), 10, 64)
+		if err != nil {
+			c.logger.Warn("invalid roomID in typing topic", "topic", msg.Topic, "error", err)
+			return
+		}
 		payload := map[string]interface{}{
 			"type":           "TYPING",
 			"senderUsername": c.Username,
-			"roomId":         msg.Topic,
+			"roomId":         roomID,
 		}
 		broadcastMsg := BroadcastMessage{
 			Topic:   msg.Topic,
@@ -110,107 +217,10 @@ func (c *Client) handleIncomingMessage(message []byte) {
 			c.logger.Error("failed to marshal typing event", "error", err)
 			return
 		}
-		c.Hub.Broadcast <- &InternalBroadcast{
+		c.Hub.Broadcast <- &shared.InternalBroadcast{
 			Message: jsonMsg,
 			Origin:  c,
 		}
-
-	case "new_message":
-		payload, ok := msg.Payload.(map[string]interface{})
-		if !ok {
-			c.logger.Warn("invalid payload for new_message", "payload", msg.Payload)
-			return
-		}
-		content, ok := payload["content"].(string)
-		if !ok || content == "" {
-			c.logger.Warn("content is missing or invalid in new_message payload")
-			return
-		}
-		roomID := strings.TrimPrefix(msg.Topic, "room:")
-		if err := c.coreClient.PostNewMessage(c.token, roomID, content); err != nil {
-			c.logger.Error("failed to post new message", "error", err)
-		}
-
-	case "edit_message":
-		payload, ok := msg.Payload.(map[string]interface{})
-		if !ok {
-			c.logger.Warn("invalid payload for edit_message", "payload", msg.Payload)
-			return
-		}
-		messageID, idOk := payload["messageId"].(string)
-		content, contentOk := payload["content"].(string)
-		if !idOk || !contentOk || messageID == "" {
-			c.logger.Warn("invalid data for edit_message payload")
-			return
-		}
-		if err := c.coreClient.EditMessage(c.token, messageID, content); err != nil {
-			c.logger.Error("failed to edit message", "error", err)
-		}
-
-	case "delete_message":
-		payload, ok := msg.Payload.(map[string]interface{})
-		if !ok {
-			c.logger.Warn("invalid payload for delete_message", "payload", msg.Payload)
-			return
-		}
-		messageID, ok := payload["messageId"].(string)
-		if !ok || messageID == "" {
-			c.logger.Warn("messageId is missing in delete_message payload")
-			return
-		}
-		if err := c.coreClient.DeleteMessage(c.token, messageID); err != nil {
-			c.logger.Error("failed to delete message", "error", err)
-		}
-
-	case "toggle_pin":
-		payload, ok := msg.Payload.(map[string]interface{})
-		if !ok {
-			c.logger.Warn("invalid payload for toggle_pin", "payload", msg.Payload)
-			return
-		}
-		messageID, ok := payload["messageId"].(string)
-		if !ok || messageID == "" {
-			c.logger.Warn("messageId is missing in toggle_pin payload")
-			return
-		}
-		if err := c.coreClient.TogglePinMessage(c.token, messageID); err != nil {
-			c.logger.Error("failed to toggle pin", "error", err)
-		}
-
-	case "toggle_reaction":
-		payload, ok := msg.Payload.(map[string]interface{})
-		if !ok {
-			c.logger.Warn("invalid payload for toggle_reaction", "payload", msg.Payload)
-			return
-		}
-		messageID, idOk := payload["messageId"].(string)
-		emoji, emojiOk := payload["emoji"].(string)
-		if !idOk || !emojiOk || messageID == "" || emoji == "" {
-			c.logger.Warn("invalid data for toggle_reaction payload")
-			return
-		}
-		if err := c.coreClient.ToggleReaction(c.token, messageID, emoji); err != nil {
-			c.logger.Error("failed to toggle reaction", "error", err)
-		}
-
-	case "messages_seen":
-		payload, ok := msg.Payload.(map[string]interface{})
-		if !ok {
-			c.logger.Warn("invalid payload for messages_seen", "payload", msg.Payload)
-			return
-		}
-		lastMessageID, ok := payload["lastMessageId"].(float64)
-		if !ok || lastMessageID <= 0 {
-			c.logger.Warn("lastMessageId is missing or invalid in messages_seen payload")
-			return
-		}
-		roomID := strings.TrimPrefix(msg.Topic, "room:")
-		if err := c.coreClient.MarkMessagesAsSeen(c.token, roomID, lastMessageID); err != nil {
-			c.logger.Error("failed to mark messages as seen", "error", err)
-		}
-
-	default:
-		c.logger.Warn("unknown client message action", "action", msg.Action)
 	}
 }
 

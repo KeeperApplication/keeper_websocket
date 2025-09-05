@@ -7,16 +7,16 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"keeper.websocket.go/internal/config"
-	"keeper.websocket.go/internal/websocket"
+	"keeper.websocket.go/internal/shared"
 )
 
 type Consumer struct {
 	logger    *slog.Logger
 	cfg       *config.Config
-	broadcast chan<- *websocket.InternalBroadcast
+	broadcast chan<- *shared.InternalBroadcast
 }
 
-func NewConsumer(logger *slog.Logger, cfg *config.Config, broadcast chan<- *websocket.InternalBroadcast) *Consumer {
+func NewConsumer(logger *slog.Logger, cfg *config.Config, broadcast chan *shared.InternalBroadcast) *Consumer {
 	return &Consumer{
 		logger:    logger,
 		cfg:       cfg,
@@ -106,7 +106,7 @@ func (c *Consumer) listenForMessages(ctx context.Context) {
 			c.logger.Info("rabbitmq consumer connected and waiting for messages")
 
 			for d := range msgs {
-				c.broadcast <- &websocket.InternalBroadcast{
+				c.broadcast <- &shared.InternalBroadcast{
 					Message: d.Body,
 					Origin:  nil,
 				}

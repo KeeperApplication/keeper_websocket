@@ -3,6 +3,8 @@ package websocket
 import (
 	"encoding/json"
 	"log/slog"
+
+	"keeper.websocket.go/internal/shared"
 )
 
 const PresenceTopic = "presence:lobby"
@@ -10,7 +12,7 @@ const PresenceTopic = "presence:lobby"
 type Hub struct {
 	clients     map[*Client]bool
 	topics      map[string]map[*Client]bool
-	Broadcast   chan *InternalBroadcast
+	Broadcast   chan *shared.InternalBroadcast
 	Register    chan *Client
 	Unregister  chan *Client
 	Subscribe   chan *Subscription
@@ -22,7 +24,7 @@ func NewHub(logger *slog.Logger) *Hub {
 	return &Hub{
 		clients:     make(map[*Client]bool),
 		topics:      make(map[string]map[*Client]bool),
-		Broadcast:   make(chan *InternalBroadcast),
+		Broadcast:   make(chan *shared.InternalBroadcast),
 		Register:    make(chan *Client),
 		Unregister:  make(chan *Client),
 		Subscribe:   make(chan *Subscription),
@@ -69,7 +71,13 @@ func (h *Hub) Run() {
 				h.logger.Error("failed to unmarshal broadcast message", "error", err)
 				continue
 			}
-			h.broadcastToTopic(broadcast.Message, msg.Topic, broadcast.Origin)
+			var originClient *Client
+			if broadcast.Origin != nil {
+				if c, ok := broadcast.Origin.(*Client); ok {
+					originClient = c
+				}
+			}
+			h.broadcastToTopic(broadcast.Message, msg.Topic, originClient)
 		}
 	}
 }

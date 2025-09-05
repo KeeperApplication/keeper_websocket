@@ -8,25 +8,24 @@ import (
 	"github.com/gorilla/websocket"
 	"keeper.websocket.go/internal/auth"
 	"keeper.websocket.go/internal/config"
-	"keeper.websocket.go/internal/coreapi"
 	internalWs "keeper.websocket.go/internal/websocket"
 )
 
 type WebsocketHandler struct {
-	hub        *internalWs.Hub
-	logger     *slog.Logger
-	cfg        *config.Config
-	authorizer *auth.Authorizer
-	coreClient *coreapi.Client
+	hub         *internalWs.Hub
+	logger      *slog.Logger
+	cfg         *config.Config
+	authorizer  *auth.Authorizer
+	publishFunc internalWs.PublishFunc
 }
 
-func NewWebsocketHandler(h *internalWs.Hub, l *slog.Logger, cfg *config.Config, auth *auth.Authorizer, coreClient *coreapi.Client) *WebsocketHandler {
+func NewWebsocketHandler(h *internalWs.Hub, l *slog.Logger, cfg *config.Config, auth *auth.Authorizer, pub internalWs.PublishFunc) *WebsocketHandler {
 	return &WebsocketHandler{
-		hub:        h,
-		logger:     l,
-		cfg:        cfg,
-		authorizer: auth,
-		coreClient: coreClient,
+		hub:         h,
+		logger:      l,
+		cfg:         cfg,
+		authorizer:  auth,
+		publishFunc: pub,
 	}
 }
 
@@ -39,10 +38,9 @@ func (wh *WebsocketHandler) checkOrigin(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	
+
 	return u.String() == wh.cfg.FrontendURL
 }
-
 
 func (wh *WebsocketHandler) ServeWs(w http.ResponseWriter, r *http.Request) {
 	upgrader := websocket.Upgrader{
@@ -71,7 +69,7 @@ func (wh *WebsocketHandler) ServeWs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := internalWs.NewClient(wh.hub, conn, wh.logger, username, token, wh.authorizer, wh.coreClient)
+	client := internalWs.NewClient(wh.hub, conn, wh.logger, username, token, wh.authorizer, wh.publishFunc)
 	client.Hub.Register <- client
 
 	wh.logger.Info("client connected and authenticated", "user", username)
