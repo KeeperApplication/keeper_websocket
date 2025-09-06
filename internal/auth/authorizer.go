@@ -1,9 +1,8 @@
 package auth
 
 import (
-	"fmt"
 	"log/slog"
-	"net/http"
+	"strconv"
 	"strings"
 
 	"keeper.websocket.go/internal/config"
@@ -21,7 +20,7 @@ func NewAuthorizer(cfg *config.Config, logger *slog.Logger) *Authorizer {
 	}
 }
 
-func (a *Authorizer) CanSubscribe(token string, topic string) bool {
+func (a *Authorizer) CanSubscribe(username string, authorizedRooms map[int64]bool, topic string) bool {
 	if topic == "presence:lobby" {
 		return true
 	}
@@ -37,42 +36,23 @@ func (a *Authorizer) CanSubscribe(token string, topic string) bool {
 
 	switch resourceType {
 	case "room":
-		return a.canJoinRoom(token, resourceID)
-	case "user":
-		username, err := ValidateToken(token, a.cfg.JWTSecret)
+		roomID, err := strconv.ParseInt(resourceID, 10, 64)
 		if err != nil {
+			a.logger.Warn("invalid room ID format in topic subscription", "topic", topic)
 			return false
 		}
+
+		if _, ok := authorizedRooms[roomID]; ok {
+			return true
+		}
+
+		a.logger.Warn("user not authorized for room based on JWT claims", "user", username, "roomID", roomID)
+		return false
+
+	case "user":
 		return username == resourceID
+
 	default:
 		return false
 	}
-}
-
-func (a *Authorizer) canJoinRoom(token string, roomID string) bool {
-	url := fmt.Sprintf("%s/rooms/%s/authorize-join", a.cfg.JavaApiURL, roomID)
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		a.logger.Error("failed to create authorization request", "error", err)
-		return false
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", "keeper-websocket-go/1.0")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		a.logger.Error("failed to perform authorization request", "error", err)
-		return false
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		return true
-	}
-
-	a.logger.Warn("authorization failed for room", "roomID", roomID, "status", resp.StatusCode)
-	return false
 }

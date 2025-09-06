@@ -35,9 +35,10 @@ type Client struct {
 	authorizer      *auth.Authorizer
 	publish         PublishFunc
 	presenceService *presence.Service
+	AuthorizedRooms map[int64]bool
 }
 
-func NewClient(hub *Hub, conn *websocket.Conn, logger *slog.Logger, username, token string, authorizer *auth.Authorizer, publish PublishFunc, presenceService *presence.Service) *Client {
+func NewClient(hub *Hub, conn *websocket.Conn, logger *slog.Logger, username, token string, authorizer *auth.Authorizer, publish PublishFunc, presenceService *presence.Service, authorizedRooms map[int64]bool) *Client {
 	return &Client{
 		Hub:             hub,
 		Conn:            conn,
@@ -49,6 +50,7 @@ func NewClient(hub *Hub, conn *websocket.Conn, logger *slog.Logger, username, to
 		authorizer:      authorizer,
 		publish:         publish,
 		presenceService: presenceService,
+		AuthorizedRooms: authorizedRooms,
 	}
 }
 
@@ -190,7 +192,7 @@ func (c *Client) handleIncomingMessage(message []byte) {
 func (c *Client) handleLocalAction(msg *ClientMessage) {
 	switch msg.Action {
 	case "subscribe":
-		if !c.authorizer.CanSubscribe(c.token, msg.Topic) {
+		if !c.authorizer.CanSubscribe(c.Username, c.AuthorizedRooms, msg.Topic) {
 			c.logger.Warn("authorization failed for subscription", "topic", msg.Topic, "user", c.Username)
 			return
 		}

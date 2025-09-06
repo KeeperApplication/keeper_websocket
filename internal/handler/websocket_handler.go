@@ -60,12 +60,13 @@ func (wh *WebsocketHandler) ServeWs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username, err := auth.ValidateToken(token, wh.cfg.JWTSecret)
+	claimsData, err := auth.ValidateToken(token, wh.cfg.JWTPublicKey)
 	if err != nil {
 		wh.logger.Warn("invalid token", "error", err)
 		http.Error(w, "Invalid auth token", http.StatusUnauthorized)
 		return
 	}
+	username := claimsData.Username
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -87,7 +88,12 @@ func (wh *WebsocketHandler) ServeWs(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	client := internalWs.NewClient(wh.hub, conn, wh.logger, username, token, wh.authorizer, wh.publishFunc, wh.presenceService)
+	roomPermissionMap := make(map[int64]bool)
+	for _, id := range claimsData.RoomIDs {
+		roomPermissionMap[id] = true
+	}
+
+	client := internalWs.NewClient(wh.hub, conn, wh.logger, username, token, wh.authorizer, wh.publishFunc, wh.presenceService, roomPermissionMap)
 	client.Hub.Register <- client
 
 	wh.logger.Info("client connected and authenticated", "user", username)

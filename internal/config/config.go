@@ -8,12 +8,12 @@ import (
 )
 
 type Config struct {
-	Port        string
-	RabbitMQURL string
-	JWTSecret   string
-	JavaApiURL  string
-	FrontendURL string
-	RedisURL    string
+	Port         string
+	RabbitMQURL  string
+	JWTPublicKey string
+	JavaApiURL   string
+	FrontendURL  string
+	RedisURL     string
 }
 
 func Load() *Config {
@@ -25,12 +25,12 @@ func Load() *Config {
 	}
 
 	return &Config{
-		Port:        getEnv("PORT", "4000"),
-		RabbitMQURL: getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
-		JWTSecret:   getEnv("JWT_SECRET", "default-secret"),
-		JavaApiURL:  getEnv("JAVA_API_URL", "http://localhost:8080/api"),
-		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
-		RedisURL:    getEnv("REDIS_URL", "redis://localhost:6379/0"),
+		Port:         getEnv("PORT", "4000"),
+		RabbitMQURL:  getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
+		JWTPublicKey: getEnv("JWT_PUBLIC_KEY", ""),
+		JavaApiURL:   getEnv("JAVA_API_URL", "http://localhost:8080/api"),
+		FrontendURL:  getEnv("FRONTEND_URL", "http://localhost:5173"),
+		RedisURL:     getEnv("REDIS_URL", "redis://localhost:6379/0"),
 	}
 }
 
